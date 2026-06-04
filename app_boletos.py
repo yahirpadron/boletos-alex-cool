@@ -164,43 +164,40 @@ with pestana_papa:
 with pestana_puerta:
     st.title("🛡️ CONTROL DE ACCESO")
     
-    st.markdown("### 📷 Escanear Código QR")
-    st.info("Apunta la cámara al QR del boleto y toma la foto:")
+    st.markdown("### 📷 Opción 1: Escanear Código QR")
+    foto_qr = st.camera_input("Enfoca el QR del boleto")
     
-    # Cámara nativa ultra-robusta de Streamlit
-    foto_qr = st.camera_input("Enfoca el QR")
-    
-    ticket_detectado = None
-    
-    # Procesar la foto en tiempo real con OpenCV si el usuario capturó una imagen
+    st.markdown("### 🔍 Opción 2: Buscar Manualmente")
+    buscar_manual = st.text_input("Ingresa Clave o Nombre del Cliente:").upper().strip()
+
+    # Variable que guardará el código final que enviaremos a la base de datos
+    ticket_a_buscar = None
+
+    # 1. Si el usuario tomó una foto, intentamos extraer el texto del QR
     if foto_qr is not None:
         bytes_data = foto_qr.getvalue()
         cv2_img = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
-        
-        # Detector inteligente de códigos QR
         detector = cv2.QRCodeDetector()
-        datos, puntos, _ = detector.detectAndDecode(cv2_img)
+        datos, _, _ = detector.detectAndDecode(cv2_img)
         
         if datos:
-            ticket_detectado = datos.strip().upper()
-            st.success(f"🎯 ¡Código QR escaneado con éxito!: **{ticket_detectado}**")
+            ticket_a_buscar = datos.strip().upper()
         else:
-            st.error("❌ No se detectó ningún QR claro en la foto. Intenta acercar un poco más el boleto, centrarlo bien y volver a disparar.")
-    
-    st.markdown("---")
-    st.markdown("### 🔍 O busca manualmente:")
-    buscar_ticket = st.text_input("Ingresa Clave o Nombre del Cliente:").upper().strip()
+            st.warning("⚠️ No se detectó un código QR legible en la foto. Intenta centrarlo bien o usar el buscador manual.")
 
-    # La foto tiene prioridad si leyó datos válidos
-    ticket_final = ticket_detectado if ticket_detectado else buscar_ticket
+    # 2. Si la cámara no leyó nada pero el usuario escribió en el buscador manual, usamos el manual
+    if not ticket_a_buscar and buscar_manual:
+        ticket_a_buscar = buscar_manual
 
-    if ticket_final:
+    # 3. VALIDACIÓN CONTRA LA BASE DE DATOS
+    if ticket_a_buscar:
+        st.markdown("---")
         conn, cursor = conectar_db()
         cursor.execute("""
             SELECT clave, cliente, total_personas, entrados, mesa, pago, estatus 
             FROM reservaciones 
             WHERE clave = ? OR cliente LIKE ?
-        """, (ticket_final, f"%{ticket_final}%"))
+        """, (ticket_a_buscar, f"%{ticket_a_buscar}%"))
         
         resultado = cursor.fetchone()
         
@@ -211,13 +208,15 @@ with pestana_puerta:
             if entrados == 0:
                 color_alerta = "🟢 SIN USAR (Nadie ha entrado)"
             elif entrados < total:
-                color_alerta = f"🟡 PARCIAL ({entrados} adentro, quedan {disponibles} por entrar)"
+                color_alerta = f"🟡 ENTRADA PARCIAL ({entrados} adentro, quedan {disponibles})"
             else:
                 color_alerta = "🔴 COMPLETADO (Todos los accesos usados)"
 
+            # Desplegar tarjeta de control de acceso
             st.markdown(f"""
                 <div class="card">
-                    <h3 style='color:#F1C40F !important; text-align:left;'>🎫 Ticket Encontrado: {clave}</h3>
+                    <h3 style='color:#2ECC71 !important; text-align:left;'>✅ ¡BOLETO OFICIAL ENCONTRADO!</h3>
+                    <b>🎫 Folio:</b> {clave}<br>
                     <b>👤 Cliente:</b> {cliente}<br>
                     <b>🛋️ ¿Tiene Mesa?:</b> {mesa}<br>
                     <b>💰 Pago Registrado:</b> ${pago:,.2f} MXN<br>
@@ -227,14 +226,12 @@ with pestana_puerta:
                 </div>
             """, unsafe_allow_html=True)
 
+            # Si quedan accesos, mostrar el recuadro para registrar personas
             if disponibles > 0:
                 st.markdown("### 📥 Registrar entrada:")
                 personas_a_ingresar = st.number_input(
-                    f"¿Cuántas personas ingresan? (Máximo {disponibles}):", 
-                    min_value=1, 
-                    max_value=disponibles, 
-                    value=min(1, disponibles),
-                    step=1
+                    f"¿Cuántas personas ingresan ahorita? (Máximo {disponibles}):", 
+                    min_value=1, max_value=disponibles, value=1, step=1
                 )
                 
                 if st.button("🚀 CONFIRMAR INGRESO"):
@@ -242,16 +239,15 @@ with pestana_puerta:
                     nuevo_estatus = "Completado" if nuevos_entrados == total else "Parcial"
                     
                     cursor.execute("""
-                        UPDATE reservaciones 
-                        SET entrados = ?, estatus = ? 
-                        WHERE clave = ?
+                        UPDATE reservaciones SET entrados = ?, estatus = ? WHERE clave = ?
                     """, (nuevos_entrados, nuevo_estatus, clave))
                     conn.commit()
                     st.success(f"⚡ ¡Acceso Registrado! Entraron {personas_a_ingresar} personas.")
                     st.rerun()
             else:
-                st.error("❌ ALERTA: Este boleto ya agotó todos sus accesos.")
+                st.error("❌ ALERTA: Este boleto ya agotó todos sus accesos. No dejes pasar a nadie.")
         else:
-            st.error(f"❌ TICKET NO ENCONTRADO o INVÁLIDO ({ticket_final}).")
+            # SI EL QR ES PIRATA O NO EXISTE EN LA BASE DE DATOS
+            st.error(f"🚨 ¡ALERTA DE SEGURIDAD! El código '{ticket_a_buscar}' NO EXISTE en la lista oficial. Este boleto es falso o de otro evento.")
         
         conn.close()
