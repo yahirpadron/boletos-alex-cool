@@ -3,6 +3,8 @@ import sqlite3
 import qrcode
 from io import BytesIO
 from PIL import Image, ImageDraw
+# Importamos el escáner de QR para la cámara del cel
+from streamlit_qrcode_scanner import qrcode_scanner
 
 # ---------------------------------------------------------
 # 1. CONFIGURACIÓN DE LA PÁGINA (Estilo Móvil)
@@ -25,10 +27,18 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. BASE DE DATOS LOCAL
+# 2. CONEXIÓN A LA BASE DE DATOS (LOCAL O NUBE)
 # ---------------------------------------------------------
 def conectar_db():
-    conn = sqlite3.connect("boletos_data.db")
+    try:
+        import os
+        if os.path.exists("/mount/src/"):
+            conn = sqlite3.connect("/tmp/boletos_data.db")
+        else:
+            conn = sqlite3.connect("boletos_data.db")
+    except:
+        conn = sqlite3.connect("boletos_data.db")
+        
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS reservaciones (
@@ -50,45 +60,31 @@ def conectar_db():
 # 3. GENERADOR DE IMAGEN DEL BOLETO CON LOGO JPEG
 # ---------------------------------------------------------
 def generar_imagen_boleto(clave, evento, cliente, personas, mesa):
-    # 1. Crear el QR
     qr = qrcode.QRCode(version=1, box_size=10, border=2)
     qr.add_data(clave)
     qr.make(fit=True)
     qr_img = qr.make_image(fill_color="#141414", back_color="white").convert("RGB")
     qr_img = qr_img.resize((230, 230))
 
-    # 2. Crear lienzo del boleto (Ancho: 420px, Alto: 680px)
     imagen = Image.new("RGB", (420, 680), "#141414")
     lienzo = ImageDraw.Draw(imagen)
-
-    # Bordes del boleto
     lienzo.rectangle([12, 12, 408, 668], outline="#2ECC71", width=3)
     
-    # 3. LEER EL LOGO JPEG DIRECTO DESDE TU ESCRITORIO
     pos_y_actual = 30
     try:
-        # Apuntamos exactamente a tu archivo .jpeg
         logo = Image.open("logo_papa.jpeg").convert("RGB")
-        # Cambiar el tamaño para que quepa perfecto de forma proporcional (Max 120px de alto)
         logo.thumbnail((220, 120), Image.Resampling.LANCZOS)
-        
-        # Calcular el centro horizontal
         ancho_logo, alto_logo = logo.size
         centro_x = (420 - ancho_logo) // 2
-        
-        # Pegar el logo en el lienzo
         imagen.paste(logo, (centro_x, pos_y_actual))
         pos_y_actual += alto_logo + 15
     except FileNotFoundError:
-        # Respaldo por si se mueve el archivo
         lienzo.text((210, pos_y_actual + 20), "★ EVENTOS ALEX COOL ★", fill="#2ECC71", anchor="mm")
         pos_y_actual += 50
 
-    # Línea divisoria debajo del logo
     lienzo.line([(40, pos_y_actual), (380, pos_y_actual)], fill="#27AE60", width=2)
     pos_y_actual += 20
 
-    # 4. TEXTOS DEL BOLETO
     lienzo.text((210, pos_y_actual), "PASE DE ACCESO DIGITAL", fill="#888888", anchor="mm")
     pos_y_actual += 35
     
@@ -103,16 +99,13 @@ def generar_imagen_boleto(clave, evento, cliente, personas, mesa):
     lienzo.text((40, pos_y_actual), f"MESA RESERVADA:  {mesa}", fill="white")
     pos_y_actual += 35
 
-    # Línea divisoria antes del QR
     lienzo.line([(40, pos_y_actual), (380, pos_y_actual)], fill="#333333", width=1)
     pos_y_actual += 20
 
-    # 5. PEGAR EL CÓDIGO QR
     centro_qr_x = (420 - 230) // 2
     imagen.paste(qr_img, (centro_qr_x, pos_y_actual))
     pos_y_actual += 245
 
-    # Folio al fondo
     lienzo.text((210, pos_y_actual), f"FOLIO: {clave}", fill="#2ECC71", anchor="mm")
 
     buf = BytesIO()
@@ -122,16 +115,16 @@ def generar_imagen_boleto(clave, evento, cliente, personas, mesa):
 # ---------------------------------------------------------
 # 4. MENÚ DE NAVEGACIÓN PRINCIPAL
 # ---------------------------------------------------------
-pestana_papa, pestana_puerta = st.tabs(["📱 Papá: Generar Boletos", "🛡️ Tú: Control de Puerta"])
+pestana_papa, pestana_puerta = st.tabs(["🎟️ Generar Boletos", "🛡️ Control de Puerta"])
 
-# --- PESTAÑA 1: EL LADO DE TU PAPÁ ---
 with pestana_papa:
     st.title("🎟️ PANEL DE BOLETAJE")
     
+    # === AQUÍ ESTÁN TUS NUEVOS EVENTOS ===
     EVENTOS_DISPONIBLES = {
-        "Gran Baile de Rock Urbano": "RUR",
-        "Festival de Cerveza y Rock": "FCR",
-        "Concierto Especial Alex Cool": "EAC"
+        "SKACOOLFEST": "SKA",
+        "LA MAGIA DEL ROCK": "MDR",
+        "LOS MEJORES TRIBUTOS": "LMT"
     }
 
     evento_sel = st.selectbox("1. Selecciona el Evento:", list(EVENTOS_DISPONIBLES.keys()))
@@ -169,20 +162,27 @@ with pestana_papa:
                 st.error("Error de duplicación. Intenta de nuevo.")
                 conn.close()
 
-# --- PESTAÑA 2: EL LADO TUYO EN LA PUERTA ---
 with pestana_puerta:
     st.title("🛡️ CONTROL DE ACCESO")
-    st.markdown("### Buscador de Claves / Check-In")
+    
+    st.markdown("### 📷 Escanear con Cámara")
+    st.info("Pasa el código QR frente a la cámara de tu celular:")
+    
+    qr_leido = qrcode_scanner(key='lector_qr')
+    
+    st.markdown("---")
+    st.markdown("### 🔍 O busca manualmente:")
+    buscar_ticket = st.text_input("Ingresa Clave o Nombre del Cliente:").upper().strip()
 
-    buscar_ticket = st.text_input("🔍 Ingresa la Clave del QR o Nombre del Cliente:").upper().strip()
+    ticket_final = qr_leido if qr_leido else buscar_ticket
 
-    if buscar_ticket:
+    if ticket_final:
         conn, cursor = conectar_db()
         cursor.execute("""
             SELECT clave, cliente, total_personas, entrados, mesa, pago, estatus 
             FROM reservaciones 
             WHERE clave = ? OR cliente LIKE ?
-        """, (buscar_ticket, f"%{buscar_ticket}%"))
+        """, (ticket_final, f"%{ticket_final}%"))
         
         resultado = cursor.fetchone()
         
@@ -199,7 +199,7 @@ with pestana_puerta:
 
             st.markdown(f"""
                 <div class="card">
-                    <h3 style='color:#F1C40F !important; text-align:left;'>🎫 Ticket: {clave}</h3>
+                    <h3 style='color:#F1C40F !important; text-align:left;'>🎫 Ticket Encontrado: {clave}</h3>
                     <b>👤 Cliente:</b> {cliente}<br>
                     <b>🛋️ ¿Tiene Mesa?:</b> {mesa}<br>
                     <b>💰 Pago Registrado:</b> ${pago:,.2f} MXN<br>
@@ -210,9 +210,9 @@ with pestana_puerta:
             """, unsafe_allow_html=True)
 
             if disponibles > 0:
-                st.markdown("### 📥 Registrar entrada parcial o total:")
+                st.markdown("### 📥 Registrar entrada:")
                 personas_a_ingresar = st.number_input(
-                    f"¿Cuántas personas ingresan ahorita? (Máximo {disponibles}):", 
+                    f"¿Cuántas personas ingresan? (Máximo {disponibles}):", 
                     min_value=1, 
                     max_value=disponibles, 
                     value=min(1, disponibles),
@@ -234,6 +234,6 @@ with pestana_puerta:
             else:
                 st.error("❌ ALERTA: Este boleto ya agotó todos sus accesos.")
         else:
-            st.error("❌ BOLETO NO ENCONTRADO.")
+            st.error(f"❌ TICKET NO ENCONTRADO ({ticket_final}).")
         
         conn.close()
