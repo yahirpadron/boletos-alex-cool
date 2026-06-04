@@ -1,3 +1,4 @@
 qrcode
 Pillow
-streamlit-qrcode-scanner
+opencv-python-headless
+numpy
