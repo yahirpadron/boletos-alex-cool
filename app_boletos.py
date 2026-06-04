@@ -1,10 +1,10 @@
 import streamlit as st
 import sqlite3
 import qrcode
+import numpy as np
+import cv2
 from io import BytesIO
 from PIL import Image, ImageDraw
-# Importamos el escáner de QR para la cámara del cel
-from streamlit_qrcode_scanner import qrcode_scanner
 
 # ---------------------------------------------------------
 # 1. CONFIGURACIÓN DE LA PÁGINA (Estilo Móvil)
@@ -120,7 +120,6 @@ pestana_papa, pestana_puerta = st.tabs(["🎟️ Generar Boletos", "🛡️ Cont
 with pestana_papa:
     st.title("🎟️ PANEL DE BOLETAJE")
     
-    # === AQUÍ ESTÁN TUS NUEVOS EVENTOS ===
     EVENTOS_DISPONIBLES = {
         "SKACOOLFEST": "SKA",
         "LA MAGIA DEL ROCK": "MDR",
@@ -165,16 +164,35 @@ with pestana_papa:
 with pestana_puerta:
     st.title("🛡️ CONTROL DE ACCESO")
     
-    st.markdown("### 📷 Escanear con Cámara")
-    st.info("Pasa el código QR frente a la cámara de tu celular:")
+    st.markdown("### 📷 Escanear Código QR")
+    st.info("Apunta la cámara al QR del boleto y toma la foto:")
     
-    qr_leido = qrcode_scanner(key='lector_qr')
+    # Cámara nativa ultra-robusta de Streamlit
+    foto_qr = st.camera_input("Enfoca el QR")
+    
+    ticket_detectado = None
+    
+    # Procesar la foto en tiempo real con OpenCV si el usuario capturó una imagen
+    if foto_qr is not None:
+        bytes_data = foto_qr.getvalue()
+        cv2_img = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
+        
+        # Detector inteligente de códigos QR
+        detector = cv2.QRCodeDetector()
+        datos, puntos, _ = detector.detectAndDecode(cv2_img)
+        
+        if datos:
+            ticket_detectado = datos.strip().upper()
+            st.success(f"🎯 ¡Código QR escaneado con éxito!: **{ticket_detectado}**")
+        else:
+            st.error("❌ No se detectó ningún QR claro en la foto. Intenta acercar un poco más el boleto, centrarlo bien y volver a disparar.")
     
     st.markdown("---")
     st.markdown("### 🔍 O busca manualmente:")
     buscar_ticket = st.text_input("Ingresa Clave o Nombre del Cliente:").upper().strip()
 
-    ticket_final = qr_leido if qr_leido else buscar_ticket
+    # La foto tiene prioridad si leyó datos válidos
+    ticket_final = ticket_detectado if ticket_detectado else buscar_ticket
 
     if ticket_final:
         conn, cursor = conectar_db()
@@ -234,6 +252,6 @@ with pestana_puerta:
             else:
                 st.error("❌ ALERTA: Este boleto ya agotó todos sus accesos.")
         else:
-            st.error(f"❌ TICKET NO ENCONTRADO ({ticket_final}).")
+            st.error(f"❌ TICKET NO ENCONTRADO o INVÁLIDO ({ticket_final}).")
         
         conn.close()
